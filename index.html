@@ -1,0 +1,203 @@
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="utf-8">
+    <title>Mapa de Clientes - Profesional</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        html, body { height: 100%; margin: 0; padding: 0; font-family: Arial, sans-serif; }
+        #map { height: 100%; }
+        #panel {
+            position: absolute; top: 50px; left: 10px; z-index: 1000;
+            width: 280px; max-height: 95%; overflow-y: auto;
+            padding: 15px; background: white; border-radius: 10px;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2); font-size: 14px;
+        }
+        #panel-toggle {
+            position: absolute; top: 10px; left: 10px; z-index: 1001;
+            background-color: #343a40; color: white;
+            border-radius: 25px; padding: 8px 12px;
+            cursor: pointer; font-weight: bold;
+            box-shadow: 1px 1px 4px rgba(0, 0, 0, 0.3);
+        }
+        select, input[type="text"] {
+            width: 100%; margin-bottom: 8px; padding: 6px;
+            border-radius: 5px; border: 1px solid #ccc;
+        }
+        button {
+            width: 100%; background: #007bff; color: white;
+            padding: 8px; border: none; border-radius: 5px;
+            cursor: pointer; font-weight: bold;
+        }
+        .btn-float {
+            position: absolute; right: 15px; bottom: 20px;
+            display: flex; flex-direction: column; gap: 10px; z-index: 999;
+        }
+        .btn-float button {
+            display: flex; align-items: center; gap: 5px;
+            padding: 10px 12px; font-size: 14px;
+        }
+        .registrar { background-color: #007bff; }
+        .nuevo { background-color: #28a745; }
+        .visitar { background-color: #fd7e14; }
+    </style>
+</head>
+<body>
+<div id="panel-toggle">☰ Filtros</div>
+<div id="panel">
+    <label>Vendedor</label>
+    <select id="filtroVendedor" onchange="aplicarFiltros()"><option value="">-- Todos --</option></select>
+    <label>Gestor</label>
+    <select id="filtroGestor" onchange="aplicarFiltros()"><option value="">-- Todos --</option></select>
+    <label>Semana</label>
+    <select id="filtroSemana" onchange="aplicarFiltros()"><option value="">-- Todas --</option></select>
+    <label>Día</label>
+    <select id="filtroDia" onchange="aplicarFiltros()"><option value="">-- Todos --</option></select>
+    <label>Condición</label>
+    <select id="filtroCondicion" onchange="aplicarFiltros()"><option value="">-- Todas --</option></select>
+    <label>Buscar Cliente</label>
+    <input type="text" id="filtroBuscar" placeholder="Nombre del cliente" oninput="aplicarFiltros()">
+    <label>Cliente</label>
+    <select id="filtroCliente" onchange="aplicarFiltros()"><option value="">-- Todos --</option></select>
+    <button onclick="restaurarMapa()">Restaurar</button>
+</div>
+<div id="map"></div>
+<div class="btn-float">
+    <button class="registrar" onclick="accionFormulario('registro')">📍 Registrar Visita</button>
+    <button class="nuevo" onclick="accionFormulario('nuevo')">➕ Nuevo Cliente</button>
+    <button class="visitar" onclick="accionFormulario('visitar')">🚗 Visitar Cliente</button>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+<script>
+const URL_CSV = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTnmjSg8mtidztak7cO6Es8tOTRujAes62qA9gsu1FYn219IaLqBpkYlIgZJgDNcpKHATaG9tWqwrE7/pub?output=csv';
+let map = L.map('map').setView([18.7357, -70.1627], 8);
+let dataOriginal = [];
+let capaClientes = L.layerGroup().addTo(map);
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap contributors'
+}).addTo(map);
+
+const colores = ['blue', 'green', 'orange', 'violet', 'black'];
+function iconoPorVendedor(vendedor) {
+    const vendedores = [...new Set(dataOriginal.map(d => d.vendedor).filter(Boolean))];
+    const index = vendedores.indexOf(vendedor);
+    const color = colores[index % colores.length];
+    return new L.Icon({
+        iconUrl: `https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-${color}.png`,
+        shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png",
+        iconSize: [25, 41],
+        iconAnchor: [12, 41],
+        popupAnchor: [1, -34],
+        shadowSize: [41, 41]
+    });
+}
+
+function accionFormulario(tipo) {
+    const urls = {
+        registro: 'https://docs.google.com/forms/d/e/1FAIpQLSeEki-rHj1e1OgDTM9W_VFJmd9k3YfKNIpRhclVaK6mx-hHvA/viewform?usp=pp_url',
+        nuevo: 'https://docs.google.com/forms/d/e/1FAIpQLSeEki-rHj1e1OgDTM9W_VFJmd9k3YfKNIpRhclVaK6mx-hHvA/viewform?usp=pp_url&entry.381054793=Nuevo',
+        visitar: 'https://www.google.com/maps'
+    };
+    window.open(urls[tipo], '_blank');
+}
+
+function limpiarMarcadores() {
+    capaClientes.clearLayers();
+}
+
+function cargarFiltros(data) {
+    const campos = {
+        filtroVendedor: "vendedor",
+        filtroGestor: "gestor",
+        filtroSemana: "semana",
+        filtroDia: "dia",
+        filtroCondicion: "condicion",
+        filtroCliente: "RazonSocial"
+    };
+    for (let id in campos) {
+        const select = document.getElementById(id);
+        const valores = [...new Set(data.map(d => d[campos[id]]).filter(Boolean))].sort();
+        select.innerHTML = '<option value="">-- Todos --</option>' + valores.map(v => `<option>${v}</option>`).join('');
+    }
+}
+
+function aplicarFiltros() {
+    const vendedor = document.getElementById("filtroVendedor").value;
+    const gestor = document.getElementById("filtroGestor").value;
+    const semana = document.getElementById("filtroSemana").value;
+    const dia = document.getElementById("filtroDia").value;
+    const condicion = document.getElementById("filtroCondicion").value;
+    const cliente = document.getElementById("filtroCliente").value;
+    const buscar = document.getElementById("filtroBuscar").value.toLowerCase();
+
+    const filtrado = dataOriginal.filter(d =>
+        (!vendedor || d.vendedor === vendedor) &&
+        (!gestor || d.gestor === gestor) &&
+        (!semana || d.semana === semana) &&
+        (!dia || d.dia === dia) &&
+        (!condicion || d.condicion === condicion) &&
+        (!cliente || d.RazonSocial === cliente) &&
+        (!buscar || (d.RazonSocial && d.RazonSocial.toLowerCase().includes(buscar)))
+    );
+    mostrarClientes(filtrado);
+    if (cliente) {
+        const encontrado = filtrado.find(d => d.RazonSocial === cliente);
+        if (encontrado) {
+            const lat = parseFloat(encontrado.latitud);
+            const lng = parseFloat(encontrado.longitud);
+            map.setView([lat, lng], 14);
+        }
+    }
+}
+
+function mostrarClientes(clientes) {
+    limpiarMarcadores();
+    clientes.forEach(c => {
+        if (c.latitud && c.longitud) {
+            const lat = parseFloat(c.latitud);
+            const lng = parseFloat(c.longitud);
+            const enlace = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`;
+            const popup = `<b>${c.RazonSocial}</b><br>${c.vendedor || ''}<br>${c.gestor || ''}<br><a href="${enlace}" target="_blank">📍 Cómo llegar</a>`;
+            const marker = L.marker([lat, lng], { icon: iconoPorVendedor(c.vendedor) }).bindPopup(popup);
+            capaClientes.addLayer(marker);
+        }
+    });
+}
+
+function restaurarMapa() {
+    Papa.parse(URL_CSV, {
+        download: true,
+        header: true,
+        dynamicTyping: false,
+        skipEmptyLines: true,
+        complete: function(results) {
+            dataOriginal = results.data.map(row => ({
+                latitud: parseFloat(String(row.latitud || row.LATITUD || row.Latitud || row.LAT).replace(",", ".").trim()),
+                longitud: parseFloat(String(row.longitud || row.LONGITUD || row.Longitud || row.LONG).replace(",", ".").trim()),
+                vendedor: row.vendedor || row.VENDEDOR || row.Vendedor || "",
+                gestor: row.gestor || row.gestor_servicio || row.GESTOR || row.Gestor || "",
+                semana: row.semana || row.SEMANA || row.Semana || "",
+                dia: row.dia || row.DIA || row.Día || row['dia_visita'] || "",
+                condicion: row.condicion || row.CONDICION || row.Condición || "",
+                RazonSocial: row.RazonSocial || row["Razón Social"] || row.razon_social || row.Cliente || "Cliente sin nombre"
+            })).filter(r => !isNaN(r.latitud) && !isNaN(r.longitud));
+            cargarFiltros(dataOriginal);
+            mostrarClientes(dataOriginal);
+        }
+    });
+}
+
+document.getElementById('panel-toggle').onclick = () => {
+    const panel = document.getElementById('panel');
+    panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+};
+
+restaurarMapa();
+</script>
+</body>
+</html>

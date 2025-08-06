@@ -1,0 +1,170 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>Mapa Interactivo con Filtros</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <style>
+        #map { height: 100vh; width: 100%; }
+        #panel {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 1000;
+            background: white;
+            padding: 10px;
+            border-radius: 6px;
+            box-shadow: 0 0 8px rgba(0,0,0,0.3);
+            font-family: Arial, sans-serif;
+            font-size: 14px;
+        }
+        #panel h4 { margin: 5px 0; }
+        #panel label { display: block; margin: 3px 0; }
+        #panel select, #panel input[type="text"] {
+            width: 100%;
+            margin-bottom: 5px;
+        }
+        #panel button {
+            width: 100%;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+<div id="map"></div>
+<div id="panel">
+    <h4>Vendedor:</h4>
+    <div id="vendedorCheckboxes"></div>
+    <h4>Gestor:</h4>
+    <select id="filtroGestor"><option value="">-- Seleccione --</option></select>
+    <h4>Semana:</h4>
+    <select id="filtroSemana"><option value="">-- Seleccione --</option></select>
+    <h4>Día de la Semana:</h4>
+    <select id="filtroDia"><option value="">-- Seleccione --</option></select>
+    <h4>Condición:</h4>
+    <select id="filtroCondicion">
+        <option value="">-- Todos --</option>
+        <option value="En Ruta">En Ruta</option>
+        <option value="Sin Ruta">Sin Ruta</option>
+    </select>
+    <h4>Buscar Cliente:</h4>
+    <input type="text" id="filtroTexto" placeholder="Escriba el nombre...">
+    <h4>Cliente:</h4>
+    <select id="filtroCliente"><option value="">-- Seleccione --</option></select>
+    <button onclick="restaurarMapa()">Restaurar Mapa</button>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+    const urlCSV = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTnmjSg8mtidztak7cO6Es8tOTRujAes62qA9gsu1FYn219IaLqBpkYlIgZJgDNcpKHATaG9tWqwrE7/pub?output=csv';
+    let mapa = L.map('map').setView([18.7357, -70.1627], 8);
+    let capa = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png');
+    capa.addTo(mapa);
+
+    let marcadores = [];
+    let datosOriginales = [];
+
+    async function cargarDatos() {
+        try {
+            let resp = await fetch(urlCSV);
+            let texto = await resp.text();
+            let lineas = texto.split('\n');
+            let headers = lineas[0].split(',');
+
+            datosOriginales = lineas.slice(1).map(l => {
+                let valores = l.split(',');
+                let obj = {};
+                headers.forEach((h, i) => obj[h.trim()] = valores[i]);
+                return obj;
+            });
+
+            inicializarFiltros(datosOriginales);
+            actualizarMapa();
+        } catch (e) {
+            alert('Error cargando datos del mapa.');
+        }
+    }
+
+    function inicializarFiltros(data) {
+        let vendedores = [...new Set(data.map(d => d['vendedor_servicio']).filter(Boolean))];
+        let gestores = [...new Set(data.map(d => d['gestor_servicio']).filter(Boolean))];
+        let semanas = [...new Set(data.map(d => d['semana']).filter(Boolean))];
+        let dias = [...new Set(data.map(d => d['dia_visita']).filter(Boolean))];
+
+        const contenedorVendedores = document.getElementById('vendedorCheckboxes');
+        vendedores.forEach(v => {
+            let chk = document.createElement('label');
+            chk.innerHTML = `<input type="checkbox" value="${v}" checked> ${v}`;
+            contenedorVendedores.appendChild(chk);
+        });
+
+        let selGestor = document.getElementById('filtroGestor');
+        gestores.forEach(g => selGestor.innerHTML += `<option value="${g}">${g}</option>`);
+        let selSemana = document.getElementById('filtroSemana');
+        semanas.forEach(s => selSemana.innerHTML += `<option value="${s}">${s}</option>`);
+        let selDia = document.getElementById('filtroDia');
+        dias.forEach(d => selDia.innerHTML += `<option value="${d}">${d}</option>`);
+
+        document.querySelectorAll('#panel select, #panel input').forEach(el => {
+            el.addEventListener('change', actualizarMapa);
+            el.addEventListener('keyup', actualizarMapa);
+        });
+        document.querySelectorAll('#vendedorCheckboxes input').forEach(el => {
+            el.addEventListener('change', actualizarMapa);
+        });
+    }
+
+    function actualizarMapa() {
+        marcadores.forEach(m => mapa.removeLayer(m));
+        marcadores = [];
+
+        let filtros = {
+            vendedores: Array.from(document.querySelectorAll('#vendedorCheckboxes input:checked')).map(i => i.value),
+            gestor: document.getElementById('filtroGestor').value,
+            semana: document.getElementById('filtroSemana').value,
+            dia: document.getElementById('filtroDia').value,
+            condicion: document.getElementById('filtroCondicion').value,
+            texto: document.getElementById('filtroTexto').value.toLowerCase()
+        };
+
+        let filtrados = datosOriginales.filter(c => {
+            let coincide =
+                (filtros.vendedores.length === 0 || filtros.vendedores.includes(c['vendedor_servicio'])) &&
+                (!filtros.gestor || c['gestor_servicio'] === filtros.gestor) &&
+                (!filtros.semana || c['semana'] === filtros.semana) &&
+                (!filtros.dia || c['dia_visita'] === filtros.dia) &&
+                (!filtros.condicion || (filtros.condicion === 'En Ruta' ? c['semana'] : '') === c['semana']) &&
+                (!filtros.texto || c['RazonSocial'].toLowerCase().includes(filtros.texto));
+            return coincide;
+        });
+
+        let selectCliente = document.getElementById('filtroCliente');
+        selectCliente.innerHTML = '<option value="">-- Seleccione --</option>';
+        filtrados.forEach(c => {
+            let opt = document.createElement('option');
+            opt.value = c['RazonSocial'];
+            opt.textContent = c['RazonSocial'];
+            selectCliente.appendChild(opt);
+
+            if (c.latitud && c.longitud) {
+                let marker = L.marker([parseFloat(c.latitud), parseFloat(c.longitud)])
+                    .bindPopup(`<b>${c.RazonSocial}</b><br>${c.vendedor_servicio}`);
+                marker.addTo(mapa);
+                marcadores.push(marker);
+            }
+        });
+    }
+
+    function restaurarMapa() {
+        document.querySelectorAll('#panel select').forEach(el => el.value = '');
+        document.querySelectorAll('#panel input[type="text"]').forEach(el => el.value = '');
+        document.querySelectorAll('#vendedorCheckboxes input').forEach(el => el.checked = true);
+        actualizarMapa();
+    }
+
+    cargarDatos();
+</script>
+</body>
+</html>
